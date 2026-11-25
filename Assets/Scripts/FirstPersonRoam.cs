@@ -1,0 +1,124 @@
+using UnityEngine;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
+
+/// <summary>
+/// Simple First-Person WASD + Mouse Look controller for roaming around the cafeteria map.
+/// Press Escape to unlock the cursor, click anywhere in the Game view to lock it again.
+/// </summary>
+[RequireComponent(typeof(CharacterController))]
+public class FirstPersonRoam : MonoBehaviour
+{
+    [Header("Movement")]
+    public float walkSpeed = 5.5f;
+    public float sprintSpeed = 9.5f;
+    public float jumpHeight = 1.2f;
+    public float gravity = -19.6f;
+
+    [Header("Mouse Look")]
+    public float mouseSensitivity = 0.15f;
+    public Transform cameraTransform;
+
+    CharacterController _cc;
+    float _pitch;
+    float _verticalVelocity;
+    bool _cursorLocked = true;
+
+    void Awake()
+    {
+        _cc = GetComponent<CharacterController>();
+        if (cameraTransform == null)
+        {
+            var cam = GetComponentInChildren<Camera>();
+            if (cam != null) cameraTransform = cam.transform;
+        }
+        SetCursorLock(true);
+    }
+
+    void Update()
+    {
+        HandleCursorToggle();
+        if (_cursorLocked)
+            HandleLook();
+        HandleMove();
+    }
+
+    void HandleCursorToggle()
+    {
+#if ENABLE_INPUT_SYSTEM
+        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+            SetCursorLock(false);
+        else if (!_cursorLocked && Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+            SetCursorLock(true);
+#else
+        if (Input.GetKeyDown(KeyCode.Escape))
+            SetCursorLock(false);
+        else if (!_cursorLocked && Input.GetMouseButtonDown(0))
+            SetCursorLock(true);
+#endif
+    }
+
+    void SetCursorLock(bool locked)
+    {
+        _cursorLocked = locked;
+        Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
+        Cursor.visible = !locked;
+    }
+
+    void HandleLook()
+    {
+        Vector2 delta = Vector2.zero;
+#if ENABLE_INPUT_SYSTEM
+        if (Mouse.current != null)
+            delta = Mouse.current.delta.ReadValue() * mouseSensitivity;
+#else
+        delta = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y")) * (mouseSensitivity * 12f);
+#endif
+        transform.Rotate(Vector3.up * delta.x);
+        _pitch = Mathf.Clamp(_pitch - delta.y, -85f, 85f);
+        if (cameraTransform != null)
+            cameraTransform.localRotation = Quaternion.Euler(_pitch, 0f, 0f);
+    }
+
+    void HandleMove()
+    {
+        Vector2 input = Vector2.zero;
+        bool sprint = false;
+        bool jump = false;
+
+#if ENABLE_INPUT_SYSTEM
+        var kb = Keyboard.current;
+        if (kb != null)
+        {
+            if (kb.wKey.isPressed || kb.upArrowKey.isPressed)    input.y += 1f;
+            if (kb.sKey.isPressed || kb.downArrowKey.isPressed)  input.y -= 1f;
+            if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) input.x += 1f;
+            if (kb.aKey.isPressed || kb.leftArrowKey.isPressed)  input.x -= 1f;
+            sprint = kb.leftShiftKey.isPressed;
+            jump = kb.spaceKey.wasPressedThisFrame;
+        }
+#else
+        input.x = Input.GetAxisRaw("Horizontal");
+        input.y = Input.GetAxisRaw("Vertical");
+        sprint = Input.GetKey(KeyCode.LeftShift);
+        jump = Input.GetKeyDown(KeyCode.Space);
+#endif
+
+        if (input.sqrMagnitude > 1f) input.Normalize();
+
+        float speed = sprint ? sprintSpeed : walkSpeed;
+        Vector3 move = (transform.right * input.x + transform.forward * input.y) * speed;
+
+        if (_cc.isGrounded && _verticalVelocity < 0f)
+            _verticalVelocity = -2f;
+
+        if (_cc.isGrounded && jump)
+            _verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
+
+        _verticalVelocity += gravity * Time.deltaTime;
+        move.y = _verticalVelocity;
+
+        _cc.Move(move * Time.deltaTime);
+    }
+}
