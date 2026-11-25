@@ -20,6 +20,12 @@ public class FirstPersonRoam : MonoBehaviour
     public float mouseSensitivity = 0.15f;
     public Transform cameraTransform;
 
+    [Header("Third-Person Mode (when morphed)")]
+    public bool isThirdPerson = false;
+    public float thirdPersonDistance = 3.2f;
+    public float thirdPersonHeight = 1.2f;
+    public Vector3 firstPersonEyeOffset = new Vector3(0f, 1.62f, 0f);
+
     CharacterController _cc;
     float _pitch;
     float _verticalVelocity;
@@ -76,9 +82,46 @@ public class FirstPersonRoam : MonoBehaviour
         delta = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y")) * (mouseSensitivity * 12f);
 #endif
         transform.Rotate(Vector3.up * delta.x);
-        _pitch = Mathf.Clamp(_pitch - delta.y, -85f, 85f);
-        if (cameraTransform != null)
+        _pitch = Mathf.Clamp(_pitch - delta.y, -75f, 80f);
+        UpdateCameraTransform();
+    }
+
+    void LateUpdate()
+    {
+        UpdateCameraTransform();
+    }
+
+    void UpdateCameraTransform()
+    {
+        if (cameraTransform == null) return;
+
+        if (!isThirdPerson)
+        {
+            cameraTransform.localPosition = firstPersonEyeOffset;
             cameraTransform.localRotation = Quaternion.Euler(_pitch, 0f, 0f);
+        }
+        else
+        {
+            Quaternion orbitRot = Quaternion.Euler(_pitch, 0f, 0f);
+            Vector3 pivotLocal = new Vector3(0f, thirdPersonHeight, 0f);
+            Vector3 desiredLocalPos = pivotLocal + orbitRot * new Vector3(0f, 0f, -thirdPersonDistance);
+
+            // Prevent camera from clipping behind walls
+            Vector3 worldPivot = transform.TransformPoint(pivotLocal);
+            Vector3 worldDesired = transform.TransformPoint(desiredLocalPos);
+            Vector3 dir = worldDesired - worldPivot;
+            if (Physics.SphereCast(worldPivot, 0.18f, dir.normalized, out RaycastHit hit, dir.magnitude, ~0, QueryTriggerInteraction.Ignore))
+            {
+                if (!hit.transform.IsChildOf(transform))
+                {
+                    float safeDist = Mathf.Max(0.4f, hit.distance - 0.15f);
+                    desiredLocalPos = pivotLocal + orbitRot * new Vector3(0f, 0f, -safeDist);
+                }
+            }
+
+            cameraTransform.localPosition = desiredLocalPos;
+            cameraTransform.localRotation = orbitRot;
+        }
     }
 
     void HandleMove()
