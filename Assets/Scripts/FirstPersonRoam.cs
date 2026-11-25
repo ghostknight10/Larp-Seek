@@ -26,10 +26,16 @@ public class FirstPersonRoam : MonoBehaviour
     public float thirdPersonHeight = 1.2f;
     public Vector3 firstPersonEyeOffset = new Vector3(0f, 1.62f, 0f);
 
+    [Header("Control Gates")]
+    public bool inputEnabled = true;
+    public bool autoManageCursor = true;
+
     CharacterController _cc;
     float _pitch;
     float _verticalVelocity;
-    bool _cursorLocked = true;
+    bool _cursorLocked = false;
+
+    public bool IsCursorLocked => _cursorLocked;
 
     void Awake()
     {
@@ -39,12 +45,16 @@ public class FirstPersonRoam : MonoBehaviour
             var cam = GetComponentInChildren<Camera>();
             if (cam != null) cameraTransform = cam.transform;
         }
-        SetCursorLock(true);
+        if (MultiplayerSessionManager.Instance == null && inputEnabled && autoManageCursor)
+            SetCursorLock(true);
     }
 
     void Update()
     {
-        HandleCursorToggle();
+        if (!inputEnabled) return;
+
+        if (autoManageCursor)
+            HandleCursorToggle();
         if (_cursorLocked)
             HandleLook();
         HandleMove();
@@ -65,7 +75,7 @@ public class FirstPersonRoam : MonoBehaviour
 #endif
     }
 
-    void SetCursorLock(bool locked)
+    public void SetCursorLock(bool locked)
     {
         _cursorLocked = locked;
         Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;

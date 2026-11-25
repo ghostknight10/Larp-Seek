@@ -121,13 +121,15 @@ public static class BuildProps
         AddMeshPart(ch, "Chair_Legs",  s_MeshChairLegs,  s_MatChairSteelLegs,  false);
     }
 
-    public static void CreateMessTable(GameObject parent, string name, Vector3 worldPos, float width, float depth, bool isLeftWing)
+    public static void CreateMessTable(GameObject parent, string name, Vector3 worldPos, float width, float depth, bool isLeftWing, System.Random rng = null)
     {
         EnsureFurnitureAssets();
 
         var tblGroup = new GameObject(name);
         tblGroup.transform.SetParent(parent.transform, false);
+        float tblYaw = rng != null ? (float)(rng.NextDouble() * 6.0 - 3.0) : 0f;
         tblGroup.transform.position = worldPos;
+        tblGroup.transform.rotation = Quaternion.Euler(0f, tblYaw, 0f);
 
         bool isLong = width > 2.0f;
         Material mTop = isLong ? s_MatTableMarbleLong : s_MatTableMarbleSmall;
@@ -161,7 +163,8 @@ public static class BuildProps
             AddLeg(tblGroup, "Leg_MB", new Vector3(0f, 0.36f, -lz));
         }
 
-        // Surround tightly with smooth steel-legged dining chairs
+        // Spawn dining chairs as SIBLINGS under parent (never children of tblGroup)
+        // so Prop Hunt morphs table and chair independently, with messy natural placement.
         float zOff = depth * 0.5f + 0.25f;
         float xOff = width * 0.5f + 0.25f;
 
@@ -170,19 +173,48 @@ public static class BuildProps
             float[] xs = { -width * 0.32f, 0f, width * 0.32f };
             for (int i = 0; i < xs.Length; i++)
             {
-                CreateDiningChair(tblGroup, $"Chair_N_{i}", new Vector3(xs[i], 0f,  zOff), 180f, isLeftWing);
-                CreateDiningChair(tblGroup, $"Chair_S_{i}", new Vector3(xs[i], 0f, -zOff),   0f, isLeftWing);
+                TryPlaceMessyChair(parent, $"Chair_{name}_N_{i}", worldPos, tblYaw, new Vector3(xs[i], 0f,  zOff), 180f, isLeftWing, rng);
+                TryPlaceMessyChair(parent, $"Chair_{name}_S_{i}", worldPos, tblYaw, new Vector3(xs[i], 0f, -zOff),   0f, isLeftWing, rng);
             }
-            CreateDiningChair(tblGroup, "Chair_E", new Vector3( xOff, 0f, 0f), -90f, isLeftWing);
-            CreateDiningChair(tblGroup, "Chair_W", new Vector3(-xOff, 0f, 0f),  90f, isLeftWing);
+            TryPlaceMessyChair(parent, $"Chair_{name}_E", worldPos, tblYaw, new Vector3( xOff, 0f, 0f), -90f, isLeftWing, rng);
+            TryPlaceMessyChair(parent, $"Chair_{name}_W", worldPos, tblYaw, new Vector3(-xOff, 0f, 0f),  90f, isLeftWing, rng);
         }
         else
         {
-            CreateDiningChair(tblGroup, "Chair_N", new Vector3(0f, 0f,  zOff), 180f, isLeftWing);
-            CreateDiningChair(tblGroup, "Chair_S", new Vector3(0f, 0f, -zOff),   0f, isLeftWing);
-            CreateDiningChair(tblGroup, "Chair_E", new Vector3( xOff, 0f, 0f), -90f, isLeftWing);
-            CreateDiningChair(tblGroup, "Chair_W", new Vector3(-xOff, 0f, 0f),  90f, isLeftWing);
+            TryPlaceMessyChair(parent, $"Chair_{name}_N", worldPos, tblYaw, new Vector3(0f, 0f,  zOff), 180f, isLeftWing, rng);
+            TryPlaceMessyChair(parent, $"Chair_{name}_S", worldPos, tblYaw, new Vector3(0f, 0f, -zOff),   0f, isLeftWing, rng);
+            TryPlaceMessyChair(parent, $"Chair_{name}_E", worldPos, tblYaw, new Vector3( xOff, 0f, 0f), -90f, isLeftWing, rng);
+            TryPlaceMessyChair(parent, $"Chair_{name}_W", worldPos, tblYaw, new Vector3(-xOff, 0f, 0f),  90f, isLeftWing, rng);
         }
+    }
+
+    static void TryPlaceMessyChair(
+        GameObject parent, string chairName,
+        Vector3 tableWorldPos, float tableYaw,
+        Vector3 baseOffset, float baseFacingYaw,
+        bool isLeftWing, System.Random rng)
+    {
+        if (rng != null)
+        {
+            // ~26% chance this chair is missing (moved elsewhere / fewer chairs at table)
+            if (rng.NextDouble() < 0.26) return;
+
+            // Push out/in along facing axis and slide slightly sideways so chairs aren't neatly aligned
+            Vector3 outward = baseOffset.normalized;
+            Vector3 tangent = new Vector3(-outward.z, 0f, outward.x);
+            float pullOut = (float)(rng.NextDouble() * 0.30 - 0.04); // -0.04m tucked .. +0.26m pulled out
+            float slide   = (float)(rng.NextDouble() * 0.28 - 0.14);
+            baseOffset += outward * pullOut + tangent * slide;
+
+            // Occasional chair turned sharply as if someone just stood up
+            float yawJitter = (rng.NextDouble() < 0.20)
+                ? (float)(rng.NextDouble() * 90.0 - 45.0)
+                : (float)(rng.NextDouble() * 34.0 - 17.0);
+            baseFacingYaw += yawJitter;
+        }
+
+        Vector3 chairPos = tableWorldPos + Quaternion.Euler(0f, tableYaw, 0f) * baseOffset;
+        CreateDiningChair(parent, chairName, chairPos, tableYaw + baseFacingYaw, isLeftWing);
     }
 
     static void AddLeg(GameObject parent, string name, Vector3 localPos)

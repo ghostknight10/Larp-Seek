@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "unity-mcp": {
+      "command": "C:\\Users\\LENOVO LOQ\\.unity/relay\\relay_win.exe",
+      "args": [
+        "--mcp"
+      ]
+    }
+  }
+}

@@ -19,12 +19,25 @@ public class PropMorphController : MonoBehaviour
     public float normalCircleSize = 8f;
     public float hoverCircleSize = 14f;
 
+    [Header("Control")]
+    public bool inputEnabled = true;
+
+    public System.Action<PropTarget> OnLocalMorphRequested;
+    public System.Action OnLocalRevertRequested;
+    public System.Action<bool, string> OnMorphStateUpdated;
+
+    public bool IsMorphed => _isMorphed;
+    public string CurrentMorphName => _currentMorphName;
+
     FirstPersonRoam _roam;
     CharacterController _cc;
     Transform _visualRoot;
+    GameObject _humanAvatar;
     PropTarget _hoveredProp;
     Texture2D _circleTex;
     bool _isMorphed;
+    string _currentMorphName = "Human";
+    bool _showHumanWhenUnmorphed = false;
 
     void Awake()
     {
@@ -35,11 +48,25 @@ public class PropMorphController : MonoBehaviour
         vr.transform.SetParent(transform, false);
         _visualRoot = vr.transform;
 
+        BuildHumanAvatar();
         _circleTex = MakeCircleTexture(32);
+    }
+
+    public void SetHumanAvatarVisible(bool visible)
+    {
+        _showHumanWhenUnmorphed = visible;
+        if (_humanAvatar != null)
+            _humanAvatar.SetActive(visible && !_isMorphed);
     }
 
     void Update()
     {
+        if (!inputEnabled)
+        {
+            _hoveredProp = null;
+            return;
+        }
+
         UpdateHoverRaycast();
 
         bool leftClick = false;
@@ -56,18 +83,34 @@ public class PropMorphController : MonoBehaviour
 
         if (leftClick && _hoveredProp != null && Cursor.lockState == CursorLockMode.Locked)
         {
-            MorphInto(_hoveredProp);
+            if (OnLocalMorphRequested != null)
+                OnLocalMorphRequested.Invoke(_hoveredProp);
+            else
+                MorphInto(_hoveredProp);
         }
-        else if (revertKey && _isMorphed)
+        else if (revertKey && _isMorphed && Cursor.lockState == CursorLockMode.Locked)
         {
-            RevertToFirstPerson();
+            if (OnLocalRevertRequested != null)
+                OnLocalRevertRequested.Invoke();
+            else
+                RevertToFirstPerson();
         }
+    }
+
+    Camera GetPlayerCamera()
+    {
+        if (_roam != null && _roam.cameraTransform != null)
+        {
+            var cam = _roam.cameraTransform.GetComponent<Camera>();
+            if (cam != null && cam.enabled) return cam;
+        }
+        return Camera.main;
     }
 
     void UpdateHoverRaycast()
     {
         _hoveredProp = null;
-        Camera cam = Camera.main;
+        Camera cam = GetPlayerCamera();
         if (cam == null) return;
 
         Ray ray = cam.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
@@ -79,9 +122,11 @@ public class PropMorphController : MonoBehaviour
         }
     }
 
-    void MorphInto(PropTarget target)
+    public void MorphInto(PropTarget target)
     {
+        if (target == null) return;
         ClearVisual();
+        if (_humanAvatar != null) _humanAvatar.SetActive(false);
 
         // Clone visual hierarchy of the target prop
         GameObject clone = Instantiate(target.gameObject, _visualRoot);
@@ -123,28 +168,82 @@ public class PropMorphController : MonoBehaviour
         }
 
         _isMorphed = true;
+        _currentMorphName = target.DisplayName;
         _roam.isThirdPerson = true;
+        OnMorphStateUpdated?.Invoke(_isMorphed, _currentMorphName);
     }
 
     public void RevertToFirstPerson()
     {
         ClearVisual();
+        if (_humanAvatar != null)
+            _humanAvatar.SetActive(_showHumanWhenUnmorphed);
+
         _cc.height = 1.8f;
         _cc.radius = 0.35f;
         _cc.center = new Vector3(0f, 0.9f, 0f);
         _isMorphed = false;
+        _currentMorphName = "Human";
         _roam.isThirdPerson = false;
+        OnMorphStateUpdated?.Invoke(_isMorphed, _currentMorphName);
     }
 
     void ClearVisual()
     {
         for (int i = _visualRoot.childCount - 1; i >= 0; i--)
-            Destroy(_visualRoot.GetChild(i).gameObject);
+        {
+            GameObject child = _visualRoot.GetChild(i).gameObject;
+            if (child == _humanAvatar) continue;
+            Destroy(child);
+        }
+    }
+
+    void BuildHumanAvatar()
+    {
+        _humanAvatar = new GameObject("HumanAvatar");
+        _humanAvatar.transform.SetParent(_visualRoot, false);
+
+        var shirtMat = CreateMatteMaterial(new Color(0.14f, 0.34f, 0.62f));
+        var pantsMat = CreateMatteMaterial(new Color(0.13f, 0.16f, 0.22f));
+        var skinMat = CreateMatteMaterial(new Color(0.84f, 0.66f, 0.52f));
+
+        CreateAvatarPart("Torso", PrimitiveType.Cube, new Vector3(0f, 1.05f, 0f), new Vector3(0.46f, 0.62f, 0.26f), shirtMat);
+        CreateAvatarPart("Head", PrimitiveType.Cube, new Vector3(0f, 1.56f, 0f), new Vector3(0.32f, 0.32f, 0.32f), skinMat);
+        CreateAvatarPart("LegL", PrimitiveType.Cube, new Vector3(-0.12f, 0.38f, 0f), new Vector3(0.18f, 0.72f, 0.20f), pantsMat);
+        CreateAvatarPart("LegR", PrimitiveType.Cube, new Vector3(0.12f, 0.38f, 0f), new Vector3(0.18f, 0.72f, 0.20f), pantsMat);
+        CreateAvatarPart("ArmL", PrimitiveType.Cube, new Vector3(-0.33f, 1.05f, 0f), new Vector3(0.16f, 0.56f, 0.18f), shirtMat);
+        CreateAvatarPart("ArmR", PrimitiveType.Cube, new Vector3(0.33f, 1.05f, 0f), new Vector3(0.16f, 0.56f, 0.18f), shirtMat);
+
+        _humanAvatar.SetActive(false);
+    }
+
+    void CreateAvatarPart(string partName, PrimitiveType type, Vector3 localPos, Vector3 scale, Material mat)
+    {
+        GameObject go = GameObject.CreatePrimitive(type);
+        go.name = partName;
+        go.transform.SetParent(_humanAvatar.transform, false);
+        go.transform.localPosition = localPos;
+        go.transform.localScale = scale;
+        var col = go.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        var rend = go.GetComponent<Renderer>();
+        if (rend != null && mat != null) rend.sharedMaterial = mat;
+    }
+
+    static Material CreateMatteMaterial(Color color)
+    {
+        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null) shader = Shader.Find("Standard");
+        var mat = new Material(shader);
+        mat.color = color;
+        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
+        if (mat.HasProperty("_Smoothness")) mat.SetFloat("_Smoothness", 0.2f);
+        return mat;
     }
 
     void OnGUI()
     {
-        if (Cursor.lockState != CursorLockMode.Locked || _circleTex == null) return;
+        if (!inputEnabled || Cursor.lockState != CursorLockMode.Locked || _circleTex == null) return;
 
         bool hasTarget = _hoveredProp != null;
         float size = hasTarget ? hoverCircleSize : normalCircleSize;
