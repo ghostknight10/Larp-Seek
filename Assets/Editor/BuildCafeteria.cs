@@ -286,6 +286,9 @@ public static class BuildCafeteria
         BuildProps.CreateSintexDustbin(grpProps, new Vector3(xWestInner - 1.2f, 0f, zSouth - 0.6f), 0f);
         BuildProps.CreateSintexDustbin(grpProps, new Vector3(xEastInner + 1.2f, 0f, zSouth - 0.6f), 0f);
 
+        // ── PROP HUNT TAGS & RANDOMIZER ──────────────────────────────────
+        SetupPropHuntTags(root);
+
         // ── LIGHTING & SAVE ──────────────────────────────────────────────
         var dirLight = Object.FindAnyObjectByType<Light>();
         if (dirLight != null && dirLight.type == LightType.Directional)
@@ -299,6 +302,40 @@ public static class BuildCafeteria
         EditorSceneManager.MarkSceneDirty(curScene);
         EditorSceneManager.SaveOpenScenes();
         Debug.Log($"[BuildCafeteria] Built extended Pi-shaped cafeteria ({TOTAL_W}m x {TOTAL_D}m) with crisp pixelated textures.");
+    }
+
+    public static void SetupPropHuntTags(GameObject cafeRoot)
+    {
+        if (cafeRoot.GetComponent<PropRandomizer>() == null)
+            cafeRoot.AddComponent<PropRandomizer>();
+
+        foreach (Transform t in cafeRoot.GetComponentsInChildren<Transform>(true))
+        {
+            string n = t.name;
+            string label = null;
+
+            if (n.StartsWith("Chair_") && !n.Contains("Shell") && !n.Contains("Legs"))
+                label = "Chair";
+            else if (n.StartsWith("StdTable_"))
+                label = "Table";
+            else if (n == "PalmPlant")
+                label = "Potted Plant";
+            else if (n == "Dustbin_Sintex")
+                label = "Dustbin";
+            else if (n.StartsWith("Packet_") || n.StartsWith("CounterPacket_"))
+                label = "Chips Packet";
+            else if (n.StartsWith("SnackJar_"))
+                label = "Snack Jar";
+            else if (n.StartsWith("IceCream_Freezer_"))
+                label = "Ice Cream Freezer";
+
+            if (label != null)
+            {
+                var pt = t.GetComponent<PropTarget>();
+                if (pt == null) pt = t.gameObject.AddComponent<PropTarget>();
+                pt.propDisplayName = label;
+            }
+        }
     }
 
     static void CreateFloor(GameObject parent, string name, float cx, float cz, float w, float d, string texPath, Color col)

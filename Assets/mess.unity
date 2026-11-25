@@ -519305,6 +519305,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2090993361}
+  - component: {fileID: 2090993362}
   m_Layer: 0
   m_Name: IITB_Cafeteria
   m_TagString: Untagged
@@ -519333,6 +519334,29 @@ Transform:
   - {fileID: 1766253747}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2090993362
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2090993360}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3aa4bb919752dc746a973c0cec8ecddc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PropRandomizer
+  useFixedSeed: 0
+  seed: 42
+  chairMissingChance: 0.2
+  tableMissingChance: 0.12
+  plantMissingChance: 0.25
+  dustbinMissingChance: 0.3
+  chipsPacketMissingChance: 0.25
+  snackJarMissingChance: 0.25
+  freezerMissingChance: 0.5
+  _removedCount: 303
+  _keptCount: 1184
 --- !u!1 &2091472281
 GameObject:
   m_ObjectHideFlags: 0
