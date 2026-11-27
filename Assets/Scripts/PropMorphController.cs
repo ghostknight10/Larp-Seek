@@ -41,15 +41,43 @@ public class PropMorphController : MonoBehaviour
 
     void Awake()
     {
-        _roam = GetComponent<FirstPersonRoam>();
-        _cc = GetComponent<CharacterController>();
-
-        var vr = new GameObject("PlayerVisualRoot");
-        vr.transform.SetParent(transform, false);
-        _visualRoot = vr.transform;
-
-        BuildHumanAvatar();
+        EnsureVisualRoot();
         _circleTex = MakeCircleTexture(32);
+    }
+
+    public void EnsureVisualRoot()
+    {
+        if (_roam == null) _roam = GetComponent<FirstPersonRoam>();
+        if (_cc == null) _cc = GetComponent<CharacterController>();
+
+        if (_visualRoot == null)
+        {
+            var existing = transform.Find("PlayerVisualRoot");
+            if (existing != null)
+            {
+                _visualRoot = existing;
+            }
+            else
+            {
+                var vr = new GameObject("PlayerVisualRoot");
+                vr.transform.SetParent(transform, false);
+                _visualRoot = vr.transform;
+            }
+        }
+
+        if (_humanAvatar == null && _visualRoot != null)
+        {
+            var av = _visualRoot.Find("HumanAvatar");
+            if (av != null) _humanAvatar = av.gameObject;
+            else BuildHumanAvatar();
+        }
+    }
+
+    public static void SafeDestroy(Object obj)
+    {
+        if (obj == null) return;
+        if (Application.isPlaying) Object.Destroy(obj);
+        else Object.DestroyImmediate(obj);
     }
 
     public void SetHumanAvatarVisible(bool visible)
@@ -125,6 +153,7 @@ public class PropMorphController : MonoBehaviour
     public void MorphInto(PropTarget target)
     {
         if (target == null) return;
+        EnsureVisualRoot();
         ClearVisual();
         if (_humanAvatar != null) _humanAvatar.SetActive(false);
 
@@ -134,11 +163,11 @@ public class PropMorphController : MonoBehaviour
 
         // Strip colliders, rigidbodies, and PropTarget from clone so player doesn't self-collide
         foreach (var col in clone.GetComponentsInChildren<Collider>(true))
-            Destroy(col);
+            SafeDestroy(col);
         foreach (var rb in clone.GetComponentsInChildren<Rigidbody>(true))
-            Destroy(rb);
+            SafeDestroy(rb);
         foreach (var pt in clone.GetComponentsInChildren<PropTarget>(true))
-            Destroy(pt);
+            SafeDestroy(pt);
 
         clone.transform.localPosition = Vector3.zero;
         clone.transform.localRotation = Quaternion.identity;
@@ -156,45 +185,138 @@ public class PropMorphController : MonoBehaviour
             clone.transform.position += shift;
 
             // Adjust CharacterController smoothly
-            float h = Mathf.Clamp(b.size.y, 0.45f, 2.2f);
-            float r = Mathf.Clamp(Mathf.Min(b.size.x, b.size.z) * 0.42f, 0.22f, 0.55f);
-            _cc.height = Mathf.Max(h, r * 2f);
-            _cc.radius = r;
-            _cc.center = new Vector3(0f, _cc.height * 0.5f, 0f);
+            if (_cc != null)
+            {
+                float h = Mathf.Clamp(b.size.y, 0.45f, 2.2f);
+                float r = Mathf.Clamp(Mathf.Min(b.size.x, b.size.z) * 0.42f, 0.22f, 0.55f);
+                _cc.height = Mathf.Max(h, r * 2f);
+                _cc.radius = r;
+                _cc.center = new Vector3(0f, _cc.height * 0.5f, 0f);
+            }
 
             // Scale third-person camera distance slightly for larger props
-            _roam.thirdPersonDistance = Mathf.Clamp(Mathf.Max(b.size.x, b.size.z) * 1.4f + 2.2f, 2.8f, 5.5f);
-            _roam.thirdPersonHeight = Mathf.Clamp(b.size.y * 0.65f + 0.6f, 0.9f, 2.0f);
+            if (_roam != null)
+            {
+                _roam.thirdPersonDistance = Mathf.Clamp(Mathf.Max(b.size.x, b.size.z) * 1.4f + 2.2f, 2.8f, 5.5f);
+                _roam.thirdPersonHeight = Mathf.Clamp(b.size.y * 0.65f + 0.6f, 0.9f, 2.0f);
+            }
         }
 
         _isMorphed = true;
         _currentMorphName = target.DisplayName;
-        _roam.isThirdPerson = true;
+        if (_roam != null) _roam.isThirdPerson = true;
         OnMorphStateUpdated?.Invoke(_isMorphed, _currentMorphName);
     }
 
     public void RevertToFirstPerson()
     {
+        EnsureVisualRoot();
         ClearVisual();
         if (_humanAvatar != null)
             _humanAvatar.SetActive(_showHumanWhenUnmorphed);
 
-        _cc.height = 1.8f;
-        _cc.radius = 0.35f;
-        _cc.center = new Vector3(0f, 0.9f, 0f);
+        if (_cc != null)
+        {
+            _cc.height = 1.8f;
+            _cc.radius = 0.35f;
+            _cc.center = new Vector3(0f, 0.9f, 0f);
+        }
         _isMorphed = false;
         _currentMorphName = "Human";
-        _roam.isThirdPerson = false;
+        if (_roam != null) _roam.isThirdPerson = false;
         OnMorphStateUpdated?.Invoke(_isMorphed, _currentMorphName);
     }
 
     void ClearVisual()
     {
+        EnsureVisualRoot();
         for (int i = _visualRoot.childCount - 1; i >= 0; i--)
         {
             GameObject child = _visualRoot.GetChild(i).gameObject;
             if (child == _humanAvatar) continue;
-            Destroy(child);
+            SafeDestroy(child);
+        }
+    }
+
+    /// <summary>
+    /// Creates an exact standalone visual duplicate of what the player is currently morphed into
+    /// (e.g. blue chair, table, sofa, bean bag, or human avatar), complete with collider for Hunter targeting.
+    /// </summary>
+    public GameObject CreateCurrentVisualCopy()
+    {
+        EnsureVisualRoot();
+        if (_isMorphed && _visualRoot != null)
+        {
+            for (int i = 0; i < _visualRoot.childCount; i++)
+            {
+                Transform child = _visualRoot.GetChild(i);
+                if (child.gameObject == _humanAvatar) continue;
+
+                GameObject copy = Instantiate(child.gameObject);
+                copy.name = "Decoy_" + _currentMorphName;
+                copy.SetActive(true);
+
+                // Position copy to match player's current pose
+                copy.transform.position = transform.position + transform.TransformVector(child.localPosition);
+                copy.transform.rotation = transform.rotation * child.localRotation;
+                copy.transform.localScale = Vector3.Scale(transform.lossyScale, child.localScale);
+
+                foreach (var r in copy.GetComponentsInChildren<Renderer>(true))
+                    r.enabled = true;
+                foreach (var pt in copy.GetComponentsInChildren<PropTarget>(true))
+                    SafeDestroy(pt);
+                foreach (var c in copy.GetComponentsInChildren<Collider>(true))
+                    SafeDestroy(c);
+
+                EnsureDecoyCollider(copy);
+                return copy;
+            }
+        }
+
+        if (_humanAvatar != null)
+        {
+            GameObject copy = Instantiate(_humanAvatar);
+            copy.name = "Decoy_HumanAvatar";
+            copy.SetActive(true);
+            copy.transform.position = transform.position;
+            copy.transform.rotation = transform.rotation;
+            copy.transform.localScale = transform.lossyScale;
+
+            foreach (var r in copy.GetComponentsInChildren<Renderer>(true))
+                r.enabled = true;
+            foreach (var c in copy.GetComponentsInChildren<Collider>(true))
+                SafeDestroy(c);
+
+            EnsureDecoyCollider(copy);
+            return copy;
+        }
+
+        return null;
+    }
+
+    static void EnsureDecoyCollider(GameObject go)
+    {
+        var renderers = go.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length > 0)
+        {
+            Bounds b = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++)
+                b.Encapsulate(renderers[i].bounds);
+
+            var bc = go.AddComponent<BoxCollider>();
+            bc.center = go.transform.InverseTransformPoint(b.center);
+            Vector3 lossy = go.transform.lossyScale;
+            bc.size = new Vector3(
+                lossy.x != 0f ? Mathf.Abs(b.size.x / lossy.x) : b.size.x,
+                lossy.y != 0f ? Mathf.Abs(b.size.y / lossy.y) : b.size.y,
+                lossy.z != 0f ? Mathf.Abs(b.size.z / lossy.z) : b.size.z
+            );
+        }
+        else
+        {
+            var bc = go.AddComponent<BoxCollider>();
+            bc.size = new Vector3(0.7f, 1.4f, 0.7f);
+            bc.center = new Vector3(0f, 0.7f, 0f);
         }
     }
 

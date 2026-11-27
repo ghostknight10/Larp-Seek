@@ -245,11 +245,11 @@ public static class BuildTuckShop
                 for (int r = 0; r < 2; r++)
                 {
                     float bz = 0.16f - r * 0.22f;
-                    var bottle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                    var bottle = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     bottle.name = $"Drink_{s}_{c}_{r}";
                     bottle.transform.SetParent(fridge.transform, false);
-                    bottle.transform.localPosition = new Vector3(bx, y + 0.14f, bz);
-                    bottle.transform.localScale = new Vector3(0.08f, 0.12f, 0.08f);
+                    bottle.transform.localPosition = new Vector3(bx, y + 0.12f, bz);
+                    bottle.transform.localScale = new Vector3(0.08f, 0.16f, 0.08f);
                     bottle.GetComponent<Renderer>().sharedMaterial = (c % 2 == 0) ? dm : drinkMats[(s + 2) % drinkMats.Length];
                 }
             }
@@ -329,12 +329,12 @@ public static class BuildTuckShop
         for (int i = 0; i < 4; i++)
         {
             float pz = -1.3f + i * 0.85f;
-            // Clear jar with snacks inside
-            var jar = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            // Clear blocky jar with snacks inside
+            var jar = GameObject.CreatePrimitive(PrimitiveType.Cube);
             jar.name = $"SnackJar_{i}";
             jar.transform.SetParent(cnt.transform, false);
-            jar.transform.localPosition = new Vector3(-0.12f, 1.24f, pz);
-            jar.transform.localScale = new Vector3(0.24f, 0.18f, 0.24f);
+            jar.transform.localPosition = new Vector3(-0.12f, 1.22f, pz);
+            jar.transform.localScale = new Vector3(0.22f, 0.18f, 0.22f);
             jar.GetComponent<Renderer>().sharedMaterial = mGlass;
 
             // Kurkure/Lays packets stacked on counter beside jars

@@ -398,42 +398,39 @@ public static class BuildEntranceStairs
         AddMeshPart(tree, "Leaves_Lite", leafLiteMesh, matLeafLite, false);
     }
 
+    static CombineInstance BuildUVBoxInstance(Vector3 pos, Vector3 scale)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        Mesh m = Object.Instantiate(go.GetComponent<MeshFilter>().sharedMesh);
+        Object.DestroyImmediate(go);
+        return new CombineInstance { mesh = m, transform = Matrix4x4.TRS(pos, Quaternion.identity, scale) };
+    }
+
     static void AddLeafSpray(
         List<CombineInstance> dark, List<CombineInstance> mid, List<CombineInstance> lite,
         Vector3 p0, Vector3 p1, System.Random rng)
     {
-        Mesh leafCard = BuildOvateLeafMesh();
-        int clusters = 5;
+        // Chunky blocky foliage clusters with flat shading (no thin shimmering cards)
+        int clusters = 4;
         for (int c = 0; c < clusters; c++)
         {
-            float t = (c + 0.4f) / clusters;
+            float t = (c + 0.35f) / clusters;
             Vector3 center = Vector3.Lerp(p0, p1, t) + new Vector3(
-                (float)(rng.NextDouble() * 0.24 - 0.12),
-                (float)(rng.NextDouble() * 0.20 - 0.08),
-                (float)(rng.NextDouble() * 0.24 - 0.12));
+                (float)(rng.NextDouble() * 0.16 - 0.08),
+                (float)(rng.NextDouble() * 0.14 - 0.06),
+                (float)(rng.NextDouble() * 0.16 - 0.08));
 
-            // 5 leaves radiating in a rosette at each node
-            int rosette = 5;
-            for (int r = 0; r < rosette; r++)
-            {
-                float yaw = r * (360f / rosette) + (float)(rng.NextDouble() * 35f);
-                float pitch = 15f + (float)rng.NextDouble() * 55f;
-                float roll = (float)(rng.NextDouble() * 40f - 20f);
-                float scale = 0.85f + (float)rng.NextDouble() * 0.55f;
+            float boxSizeX = 0.22f + (float)rng.NextDouble() * 0.12f;
+            float boxSizeY = 0.14f + (float)rng.NextDouble() * 0.08f;
+            float boxSizeZ = 0.22f + (float)rng.NextDouble() * 0.12f;
+            var ci = BuildUVBoxInstance(center, new Vector3(boxSizeX, boxSizeY, boxSizeZ));
 
-                var ci = new CombineInstance
-                {
-                    mesh = leafCard,
-                    transform = Matrix4x4.TRS(center, Quaternion.Euler(pitch, yaw, roll), Vector3.one * scale)
-                };
-
-                bool isHighOuter = center.y > 1.75f || t > 0.72f;
-                double pick = rng.NextDouble();
-                if (isHighOuter && pick > 0.42)      lite.Add(ci);
-                else if (center.y < 1.15f && pick < 0.55) dark.Add(ci);
-                else if (pick < 0.30)                dark.Add(ci);
-                else                                 mid.Add(ci);
-            }
+            bool isHighOuter = center.y > 1.6f || t > 0.65f;
+            double pick = rng.NextDouble();
+            if (isHighOuter && pick > 0.40)      lite.Add(ci);
+            else if (center.y < 1.15f && pick < 0.50) dark.Add(ci);
+            else if (pick < 0.30)                dark.Add(ci);
+            else                                 mid.Add(ci);
         }
     }
 
@@ -535,7 +532,12 @@ public static class BuildEntranceStairs
         var existing = AssetDatabase.LoadAssetAtPath<Mesh>(path);
         if (existing != null)
         {
-            EditorUtility.CopySerialized(m, existing);
+            existing.Clear();
+            existing.vertices = m.vertices;
+            existing.normals = m.normals;
+            existing.uv = m.uv;
+            existing.triangles = m.triangles;
+            existing.RecalculateBounds();
             EditorUtility.SetDirty(existing);
             Object.DestroyImmediate(m);
             return existing;

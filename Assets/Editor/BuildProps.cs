@@ -253,30 +253,35 @@ public static class BuildProps
 
     static void BuildChairMeshes()
     {
-        // Reference chair (without cloth):
-        // Smooth one-piece molded plastic shell (rounded seat + concave arched solid backrest)
-        // resting on 4 slender cylindrical brushed-steel legs.
+        // Flat, simple, blocky retro chair just like Minecraft
         var shellParts = new List<CombineInstance>();
         var legParts   = new List<CombineInstance>();
 
-        // 4 slender steel tube legs (slightly angled outward toward floor)
-        float legTopY = 0.425f;
-        legParts.Add(BuildCylinderLegInstance(new Vector3(-0.185f, 0f,  0.185f), new Vector3(-0.165f, legTopY,  0.165f), 0.014f, 0.015f));
-        legParts.Add(BuildCylinderLegInstance(new Vector3( 0.185f, 0f,  0.185f), new Vector3( 0.165f, legTopY,  0.165f), 0.014f, 0.015f));
-        legParts.Add(BuildCylinderLegInstance(new Vector3(-0.185f, 0f, -0.185f), new Vector3(-0.165f, legTopY, -0.165f), 0.014f, 0.015f));
-        legParts.Add(BuildCylinderLegInstance(new Vector3( 0.185f, 0f, -0.185f), new Vector3( 0.165f, legTopY, -0.165f), 0.014f, 0.015f));
+        float legH = 0.42f;
+        float legSize = 0.045f;
+        // 4 chunky square legs
+        legParts.Add(BuildUVBoxInstance(new Vector3(-0.16f, legH * 0.5f,  0.16f), new Vector3(legSize, legH, legSize)));
+        legParts.Add(BuildUVBoxInstance(new Vector3( 0.16f, legH * 0.5f,  0.16f), new Vector3(legSize, legH, legSize)));
+        legParts.Add(BuildUVBoxInstance(new Vector3(-0.16f, legH * 0.5f, -0.16f), new Vector3(legSize, legH, legSize)));
+        legParts.Add(BuildUVBoxInstance(new Vector3( 0.16f, legH * 0.5f, -0.16f), new Vector3(legSize, legH, legSize)));
 
-        // Molded plastic seat pan with smooth side/front skirt
-        shellParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.438f, 0.01f), new Vector3(0.415f, 0.042f, 0.415f)));
-        shellParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.405f, 0.198f), new Vector3(0.410f, 0.042f, 0.032f))); // waterfall front lip
-        shellParts.Add(BuildUVBoxInstance(new Vector3(-0.194f, 0.405f, 0.01f), new Vector3(0.028f, 0.042f, 0.40f))); // L skirt
-        shellParts.Add(BuildUVBoxInstance(new Vector3( 0.194f, 0.405f, 0.01f), new Vector3(0.028f, 0.042f, 0.40f))); // R skirt
+        // Lower brace rails
+        legParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.14f,  0.16f), new Vector3(0.32f, 0.025f, 0.025f)));
+        legParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.14f, -0.16f), new Vector3(0.32f, 0.025f, 0.025f)));
+        legParts.Add(BuildUVBoxInstance(new Vector3(-0.16f, 0.14f, 0f), new Vector3(0.025f, 0.025f, 0.32f)));
+        legParts.Add(BuildUVBoxInstance(new Vector3( 0.16f, 0.14f, 0f), new Vector3(0.025f, 0.025f, 0.32f)));
 
-        // Smooth curved & rounded solid plastic backrest shell (concave cradle, arched rounded top)
-        shellParts.Add(new CombineInstance {
-            mesh = BuildCurvedBackrestMesh(),
-            transform = Matrix4x4.identity
-        });
+        // Flat square seat slab (Minecraft style)
+        shellParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.45f, 0f), new Vector3(0.44f, 0.06f, 0.44f)));
+
+        // Solid, vertical, flat backrest standing straight UP at back of seat (Minecraft style)
+        // Upright support posts
+        shellParts.Add(BuildUVBoxInstance(new Vector3(-0.17f, 0.72f, -0.19f), new Vector3(0.045f, 0.50f, 0.045f)));
+        shellParts.Add(BuildUVBoxInstance(new Vector3( 0.17f, 0.72f, -0.19f), new Vector3(0.045f, 0.50f, 0.045f)));
+        // Top cross rail
+        shellParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.94f, -0.19f), new Vector3(0.42f, 0.06f, 0.045f)));
+        // Flat solid backrest panel
+        shellParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.73f, -0.19f), new Vector3(0.34f, 0.38f, 0.035f)));
 
         s_MeshChairShell = SaveMeshAsset(CombineMeshes("ChairShellMesh", shellParts));
         s_MeshChairLegs  = SaveMeshAsset(CombineMeshes("ChairLegsMesh",  legParts));
@@ -569,88 +574,53 @@ public static class BuildProps
 
         string leafTexPath = MakePalmLeafTex("Assets/Textures/palm_leaf_px.png");
 
-        s_MatPot       = MakeMat("M_PalmPot",    null, new Color(0.08f, 0.08f, 0.09f), 0.25f);
+        s_MatPot       = MakeMat("M_PalmPot",    null, new Color(0.20f, 0.16f, 0.12f), 0.15f); // terracotta/dark planter
         s_MatSaucer    = MakeMat("M_PalmSaucer", null, new Color(0.76f, 0.68f, 0.55f), 0.15f);
-        s_MatSoil      = MakeMat("M_PalmSoil",   null, new Color(0.20f, 0.14f, 0.08f), 0.02f);
-        s_MatStem      = MakeMat("M_PalmStem",   null, new Color(0.16f, 0.28f, 0.10f), 0.10f);
-        s_MatLeafDark  = MakeMat("M_PalmLeaf_D", leafTexPath, new Color(0.78f, 0.92f, 0.72f), 0.15f);
-        s_MatLeafLight = MakeMat("M_PalmLeaf_L", leafTexPath, new Color(1.00f, 1.00f, 0.85f), 0.18f);
+        s_MatSoil      = MakeMat("M_PalmSoil",   null, new Color(0.16f, 0.11f, 0.06f), 0.02f);
+        s_MatStem      = MakeMat("M_PalmStem",   null, new Color(0.22f, 0.42f, 0.14f), 0.10f);
+        s_MatLeafDark  = MakeMat("M_PalmLeaf_D", leafTexPath, new Color(0.18f, 0.48f, 0.14f), 0.15f);
+        s_MatLeafLight = MakeMat("M_PalmLeaf_L", leafTexPath, new Color(0.35f, 0.70f, 0.22f), 0.18f);
 
-        // 1. Cream Saucer
-        s_MeshSaucer = SaveMeshAsset(BuildFrustumMesh("PalmSaucerMesh", 0.002f, 0.045f, 0.24f, 0.27f, 14, true));
+        // 1. Saucer tray (Minecraft low poly box)
+        var saucerParts = new List<CombineInstance>();
+        saucerParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.02f, 0f), new Vector3(0.48f, 0.04f, 0.48f)));
+        s_MeshSaucer = SaveMeshAsset(CombineMeshes("PalmSaucerMesh", saucerParts));
 
-        // 2. Black Ribbed Pot + Rim
-        var potCombined = new List<CombineInstance>();
-        potCombined.Add(new CombineInstance {
-            mesh = BuildFrustumMesh("PotBody", 0.042f, 0.44f, 0.21f, 0.295f, 14, true),
-            transform = Matrix4x4.identity
-        });
-        potCombined.Add(new CombineInstance {
-            mesh = BuildFrustumMesh("PotRim", 0.415f, 0.46f, 0.295f, 0.318f, 14, true),
-            transform = Matrix4x4.identity
-        });
-        s_MeshPot = SaveMeshAsset(CombineMeshes("PalmPotMesh", potCombined));
+        // 2. Square Minecraft Pot
+        var potParts = new List<CombineInstance>();
+        potParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.20f, 0f), new Vector3(0.40f, 0.36f, 0.40f))); // main pot cube
+        potParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.40f, 0f), new Vector3(0.46f, 0.08f, 0.46f))); // top rim
+        s_MeshPot = SaveMeshAsset(CombineMeshes("PalmPotMesh", potParts));
 
-        // 3. Soil Disc
-        s_MeshSoil = SaveMeshAsset(BuildFrustumMesh("PalmSoilMesh", 0.38f, 0.42f, 0.27f, 0.285f, 12, true));
+        // 3. Soil slab
+        s_MeshSoil = SaveMeshAsset(CombineMeshes("PalmSoilMesh", new List<CombineInstance> {
+            BuildUVBoxInstance(new Vector3(0f, 0.42f, 0f), new Vector3(0.38f, 0.04f, 0.38f))
+        }));
 
-        // 4. Multi-stemmed bamboo canes + lush arched fan fronds (matching photo!)
+        // 4. Low-poly Minecraft plant stem & blocky leaf volumes
         var stemMeshes     = new List<CombineInstance>();
         var leafDarkMeshes = new List<CombineInstance>();
         var leafLiteMeshes = new List<CombineInstance>();
 
-        // 7 stems at varying heights & radial offsets inside the pot
-        var rng = new System.Random(1795);
-        int stemCount = 7;
-        for (int s = 0; s < stemCount; s++)
-        {
-            float baseAng = s * (360f / stemCount) + (float)rng.NextDouble() * 25f;
-            float baseRad = (s == 0) ? 0.02f : 0.08f + (float)rng.NextDouble() * 0.09f;
-            float rad = baseAng * Mathf.Deg2Rad;
+        // Central vertical bamboo / stem block
+        stemMeshes.Add(BuildUVBoxInstance(new Vector3(0f, 0.70f, 0f), new Vector3(0.08f, 0.54f, 0.08f)));
 
-            Vector3 p0 = new Vector3(Mathf.Cos(rad) * baseRad, 0.40f, Mathf.Sin(rad) * baseRad);
-            float height = (s < 2) ? 1.38f + (float)rng.NextDouble() * 0.16f
-                         : (s < 5) ? 1.05f + (float)rng.NextDouble() * 0.22f
-                                   : 0.72f + (float)rng.NextDouble() * 0.20f;
-            Vector3 lean = new Vector3(Mathf.Cos(rad) * 0.14f, height, Mathf.Sin(rad) * 0.14f);
-            Vector3 pTop = p0 + lean;
+        // Blocky Minecraft-style leaf volumes
+        // Tier 1: Lower leaf block (dark green)
+        leafDarkMeshes.Add(BuildUVBoxInstance(new Vector3(0f, 0.62f, 0f), new Vector3(0.38f, 0.18f, 0.38f)));
+        // 4 side leaf buds
+        leafDarkMeshes.Add(BuildUVBoxInstance(new Vector3( 0.22f, 0.60f,  0f), new Vector3(0.12f, 0.12f, 0.16f)));
+        leafDarkMeshes.Add(BuildUVBoxInstance(new Vector3(-0.22f, 0.60f,  0f), new Vector3(0.12f, 0.12f, 0.16f)));
+        leafDarkMeshes.Add(BuildUVBoxInstance(new Vector3( 0f, 0.60f,  0.22f), new Vector3(0.16f, 0.12f, 0.12f)));
+        leafDarkMeshes.Add(BuildUVBoxInstance(new Vector3( 0f, 0.60f, -0.22f), new Vector3(0.16f, 0.12f, 0.12f)));
 
-            // Stem cane cylinder (from p0 to pTop)
-            stemMeshes.Add(BuildTubeInstance(p0, pTop, 0.015f, 0.010f));
+        // Tier 2: Mid leaf block (light green)
+        leafLiteMeshes.Add(BuildUVBoxInstance(new Vector3(0f, 0.78f, 0f), new Vector3(0.30f, 0.18f, 0.30f)));
+        leafLiteMeshes.Add(BuildUVBoxInstance(new Vector3( 0.16f, 0.78f,  0f), new Vector3(0.10f, 0.10f, 0.14f)));
+        leafLiteMeshes.Add(BuildUVBoxInstance(new Vector3(-0.16f, 0.78f,  0f), new Vector3(0.10f, 0.10f, 0.14f)));
 
-            // Add 3 tiers of palm leaf fans along upper 60% of each stem
-            int tiers = (height > 1.1f) ? 4 : 3;
-            for (int t = 0; t < tiers; t++)
-            {
-                float frac = 0.38f + (float)t / (tiers - 1) * 0.60f;
-                Vector3 nodePos = Vector3.Lerp(p0, pTop, frac);
-                float fanYaw = baseAng + t * 52f + (float)rng.NextDouble() * 30f;
-
-                // Each palm fan has 6 slender finger-like leaves radiating across a 170-deg arc
-                int fingers = 6;
-                for (int f = 0; f < fingers; f++)
-                {
-                    float spread = ((float)f / (fingers - 1) - 0.5f) * 155f;
-                    float leafYaw = fanYaw + spread;
-                    float pitch   = -8f + Mathf.Abs(f - 2.5f) * 7f - t * 6f; // upper tiers lift higher, lower droop slightly
-                    float leafLen = 0.28f + (float)rng.NextDouble() * 0.13f;
-                    float leafW   = 0.052f + (float)rng.NextDouble() * 0.014f;
-
-                    var leafM = BuildArchedLeafMesh(leafLen, leafW);
-                    var xform = Matrix4x4.TRS(
-                        nodePos,
-                        Quaternion.Euler(pitch, leafYaw, ((float)rng.NextDouble() - 0.5f) * 18f),
-                        Vector3.one);
-
-                    var ci = new CombineInstance { mesh = leafM, transform = xform };
-                    // Alternate upper/inner bright leaves vs outer darker leaves for depth
-                    if (t >= tiers - 1 || (f + t) % 3 == 0)
-                        leafLiteMeshes.Add(ci);
-                    else
-                        leafDarkMeshes.Add(ci);
-                }
-            }
-        }
+        // Tier 3: Top leaf crown (light green)
+        leafLiteMeshes.Add(BuildUVBoxInstance(new Vector3(0f, 0.94f, 0f), new Vector3(0.20f, 0.16f, 0.20f)));
 
         s_MeshStems       = SaveMeshAsset(CombineMeshes("PalmStemsMesh", stemMeshes));
         s_MeshLeavesDark  = SaveMeshAsset(CombineMeshes("PalmLeavesDarkMesh", leafDarkMeshes));
@@ -772,11 +742,19 @@ public static class BuildProps
         s_MatBinDarkInside = MakeMat("M_SintexDarkInside", null, new Color(0.04f, 0.05f, 0.07f), 0.05f);
         s_MatBinDecal      = MakeMat("M_SintexDecal",      decalTex, Color.white, 0.25f);
 
-        // Tapered rectangular bin body: base half-size 0.165, top half-size 0.215, height 0.78
-        s_MeshBinBody = SaveMeshAsset(BuildTaperedBoxMesh(0.165f, 0.215f, 0.0f, 0.78f));
+        // Chunky stepped square body
+        var bodyParts = new List<CombineInstance>();
+        bodyParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.20f, 0f), new Vector3(0.36f, 0.40f, 0.36f)));
+        bodyParts.Add(BuildUVBoxInstance(new Vector3(0f, 0.58f, 0f), new Vector3(0.42f, 0.38f, 0.42f)));
+        s_MeshBinBody = SaveMeshAsset(CombineMeshes("SintexBodyMesh", bodyParts));
 
-        // Arched open hood shell (runs along Z, arched across X from -0.23 to +0.23, open at Z=-0.22 and Z=+0.22!)
-        s_MeshBinHood = SaveMeshAsset(BuildArchedHoodMesh(0.225f, 0.032f, 0.23f, 0.815f, 0.26f, 10));
+        // Chunky stepped voxel hood shell with open throw-in tunnel along Z
+        var hoodParts = new List<CombineInstance>();
+        hoodParts.Add(BuildUVBoxInstance(new Vector3(-0.19f, 0.93f, 0f), new Vector3(0.06f, 0.22f, 0.44f)));
+        hoodParts.Add(BuildUVBoxInstance(new Vector3( 0.19f, 0.93f, 0f), new Vector3(0.06f, 0.22f, 0.44f)));
+        hoodParts.Add(BuildUVBoxInstance(new Vector3(0f, 1.05f, 0f), new Vector3(0.44f, 0.045f, 0.44f)));
+        hoodParts.Add(BuildUVBoxInstance(new Vector3(0f, 1.095f, 0f), new Vector3(0.32f, 0.045f, 0.38f)));
+        s_MeshBinHood = SaveMeshAsset(CombineMeshes("SintexHoodMesh", hoodParts));
     }
 
     static Mesh BuildTaperedBoxMesh(float bHalf, float tHalf, float y0, float y1)
@@ -866,7 +844,12 @@ public static class BuildProps
         var existing = AssetDatabase.LoadAssetAtPath<Mesh>(path);
         if (existing != null)
         {
-            EditorUtility.CopySerialized(mesh, existing);
+            existing.Clear();
+            existing.vertices = mesh.vertices;
+            existing.normals = mesh.normals;
+            existing.uv = mesh.uv;
+            existing.triangles = mesh.triangles;
+            existing.RecalculateBounds();
             EditorUtility.SetDirty(existing);
             Object.DestroyImmediate(mesh);
             return existing;

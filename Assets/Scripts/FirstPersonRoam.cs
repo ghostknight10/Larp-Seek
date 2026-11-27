@@ -29,6 +29,60 @@ public class FirstPersonRoam : MonoBehaviour
     [Header("Control Gates")]
     public bool inputEnabled = true;
     public bool autoManageCursor = true;
+    [Tooltip("Look still works but WASD/jump are ignored (downed spectators, Hunter during hide phase).")]
+    public bool movementLocked = false;
+
+    // Spectate / free-look: the camera looks around on its own yaw while the body (and any prop
+    // disguise) keeps its rotation, so other players see no movement at all.
+    bool _freeLook;
+    float _freeYaw;
+    float _planarSpeed;
+    public bool IsFreeLook => _freeLook;
+    public bool IsStationary => _cc != null && _cc.isGrounded && _planarSpeed < 0.15f;
+
+    public void SetFreeLook(bool on)
+    {
+        if (_freeLook == on) return;
+        _freeLook = on;
+        if (!on) _freeYaw = 0f;
+    }
+
+    // Spectator fly-cam (downed Hiders): the camera detaches from the body and flies freely with
+    // WASD (+ Space / Ctrl for up / down, Shift to go faster). The body itself never moves.
+    [Header("Spectator Fly-Cam")]
+    public float flySpeed = 7f;
+    public float flyFastSpeed = 16f;
+    bool _fly;
+    Vector3 _flyPos;
+    float _flyYaw;
+    float _flyStartY;
+    public bool IsSpectatorFlying => _fly;
+
+    public void SetSpectatorFly(bool on)
+    {
+        if (_fly == on) return;
+        _fly = on;
+        if (on)
+        {
+            _freeLook = false;
+            if (cameraTransform != null)
+            {
+                _flyPos = cameraTransform.position;
+                _flyYaw = cameraTransform.eulerAngles.y;
+            }
+            else
+            {
+                _flyPos = transform.position + Vector3.up * 1.6f;
+                _flyYaw = transform.eulerAngles.y;
+            }
+            _flyStartY = _flyPos.y;
+        }
+        else
+        {
+            _freeYaw = 0f;
+        }
+        UpdateCameraTransform();
+    }
 
     CharacterController _cc;
     float _pitch;
@@ -36,6 +90,18 @@ public class FirstPersonRoam : MonoBehaviour
     bool _cursorLocked = false;
 
     public bool IsCursorLocked => _cursorLocked;
+    public float VerticalVelocity => _verticalVelocity;
+
+    public void Bounce(float force)
+    {
+        _verticalVelocity = force;
+    }
+
+    public void SetSpeed(float walk, float sprint)
+    {
+        walkSpeed = walk;
+        sprintSpeed = sprint;
+    }
 
     void Awake()
     {
@@ -45,6 +111,8 @@ public class FirstPersonRoam : MonoBehaviour
             var cam = GetComponentInChildren<Camera>();
             if (cam != null) cameraTransform = cam.transform;
         }
+        // Retro look: no anti-aliasing of any kind on the player camera.
+        RetroScreenEffect.ConfigureCamera(GetComponentInChildren<Camera>(true));
         if (MultiplayerSessionManager.Instance == null && inputEnabled && autoManageCursor)
             SetCursorLock(true);
     }
@@ -91,7 +159,12 @@ public class FirstPersonRoam : MonoBehaviour
 #else
         delta = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y")) * (mouseSensitivity * 12f);
 #endif
-        transform.Rotate(Vector3.up * delta.x);
+        if (_fly)
+            _flyYaw = Mathf.Repeat(_flyYaw + delta.x, 360f);
+        else if (_freeLook)
+            _freeYaw = Mathf.Repeat(_freeYaw + delta.x + 180f, 360f) - 180f;
+        else
+            transform.Rotate(Vector3.up * delta.x);
         _pitch = Mathf.Clamp(_pitch - delta.y, -75f, 80f);
         UpdateCameraTransform();
     }
@@ -105,14 +178,20 @@ public class FirstPersonRoam : MonoBehaviour
     {
         if (cameraTransform == null) return;
 
+        if (_fly)
+        {
+            cameraTransform.SetPositionAndRotation(_flyPos, Quaternion.Euler(_pitch, _flyYaw, 0f));
+            return;
+        }
+
         if (!isThirdPerson)
         {
             cameraTransform.localPosition = firstPersonEyeOffset;
-            cameraTransform.localRotation = Quaternion.Euler(_pitch, 0f, 0f);
+            cameraTransform.localRotation = Quaternion.Euler(_pitch, _freeYaw, 0f);
         }
         else
         {
-            Quaternion orbitRot = Quaternion.Euler(_pitch, 0f, 0f);
+            Quaternion orbitRot = Quaternion.Euler(_pitch, _freeYaw, 0f);
             Vector3 pivotLocal = new Vector3(0f, thirdPersonHeight, 0f);
             Vector3 desiredLocalPos = pivotLocal + orbitRot * new Vector3(0f, 0f, -thirdPersonDistance);
 
@@ -160,6 +239,35 @@ public class FirstPersonRoam : MonoBehaviour
 
         if (input.sqrMagnitude > 1f) input.Normalize();
 
+        if (_fly)
+        {
+            float up = 0f;
+#if ENABLE_INPUT_SYSTEM
+            if (kb != null)
+            {
+                if (kb.spaceKey.isPressed || kb.eKey.isPressed) up += 1f;
+                if (kb.leftCtrlKey.isPressed || kb.cKey.isPressed || kb.qKey.isPressed) up -= 1f;
+            }
+#else
+            if (Input.GetKey(KeyCode.Space) || Input.GetKey(KeyCode.E)) up += 1f;
+            if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.C) || Input.GetKey(KeyCode.Q)) up -= 1f;
+#endif
+            Quaternion look = Quaternion.Euler(_pitch, _flyYaw, 0f);
+            Vector3 dir = look * new Vector3(input.x, 0f, input.y) + Vector3.up * up;
+            if (dir.sqrMagnitude > 1f) dir.Normalize();
+            _flyPos += dir * (sprint ? flyFastSpeed : flySpeed) * Time.deltaTime;
+            _flyPos.y = Mathf.Clamp(_flyPos.y, _flyStartY - 8f, _flyStartY + 35f);
+            // The body stays put (it only settles under gravity).
+            input = Vector2.zero;
+            jump = false;
+        }
+
+        if (movementLocked || _freeLook)
+        {
+            input = Vector2.zero;
+            jump = false;
+        }
+
         float speed = sprint ? sprintSpeed : walkSpeed;
         Vector3 move = (transform.right * input.x + transform.forward * input.y) * speed;
 
@@ -172,6 +280,7 @@ public class FirstPersonRoam : MonoBehaviour
         _verticalVelocity += gravity * Time.deltaTime;
         move.y = _verticalVelocity;
 
+        _planarSpeed = new Vector2(move.x, move.z).magnitude;
         _cc.Move(move * Time.deltaTime);
     }
 }

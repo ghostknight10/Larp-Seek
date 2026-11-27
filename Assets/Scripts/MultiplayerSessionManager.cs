@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Threading.Tasks;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
@@ -26,7 +29,8 @@ public struct LobbyPlayerSummary
 }
 
 /// <summary>
-/// Coordinates Unity Services authentication, Relay/Lobby session hosting and joining by code,
+/// Coordinates Unity Services authentication, Relay/Lobby session hosting and joining by code
+/// (DTLS/UDP first, automatic WebSocket Secure wss:443 fallback for strict NATs/firewalls),
 /// LAN local direct play, offline solo play, and returning cleanly to the Main Menu.
 /// </summary>
 public class MultiplayerSessionManager : MonoBehaviour
@@ -42,7 +46,12 @@ public class MultiplayerSessionManager : MonoBehaviour
     [SerializeField] int maxPlayers = 8;
     [SerializeField] ushort defaultLanPort = 7777;
 
+    [Header("Relay Transport Fallback")]
+    [Tooltip("Seconds to wait for a Relay handshake before retrying with the other protocol (DTLS <-> WSS).")]
+    [SerializeField] float relayConnectTimeoutSeconds = 8f;
+
     const string PrefPlayerNameKey = "LarpSeek_PlayerName";
+    const string PrefPreferWssKey = "LarpSeek_PreferWss";
 
     public event Action OnSessionUpdated;
     public event Action<string> OnStatusMessage;
@@ -56,6 +65,15 @@ public class MultiplayerSessionManager : MonoBehaviour
         ConnectionMode == SessionConnectionMode.SoloOffline ||
         (NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost);
 
+    /// <summary>Relay protocol used by the current online session (DTLS or WSS).</summary>
+    public RelayProtocol ActiveRelayProtocol { get; private set; } = RelayProtocol.DTLS;
+
+    string _cachedLanIp;
+    /// <summary>Active local IPv4 of this machine (Wi-Fi / Ethernet) for LAN joining.</summary>
+    public string LocalLanIPv4 => string.IsNullOrEmpty(_cachedLanIp) ? (_cachedLanIp = DetectLocalIPv4()) : _cachedLanIp;
+    public ushort LanPort => _lanPort;
+    public void RefreshLocalLanIPv4() => _cachedLanIp = DetectLocalIPv4();
+
     public string CurrentJoinCode
     {
         get
@@ -63,7 +81,9 @@ public class MultiplayerSessionManager : MonoBehaviour
             if (ConnectionMode == SessionConnectionMode.OnlineRelayCode && ActiveSession != null)
                 return ActiveSession.Code ?? string.Empty;
             if (ConnectionMode == SessionConnectionMode.LocalLan)
-                return $"LAN:{_lanPort}";
+                return NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer
+                    ? $"{LocalLanIPv4}:{_lanPort}"
+                    : $"{_lanTargetIp}:{_lanPort}";
             if (ConnectionMode == SessionConnectionMode.SoloOffline)
                 return "SOLO";
             return string.Empty;
@@ -74,6 +94,7 @@ public class MultiplayerSessionManager : MonoBehaviour
     bool _isBusy;
     bool _inMatch;
     ushort _lanPort = 7777;
+    string _lanTargetIp = "127.0.0.1";
     NetworkPlayerController _offlineSoloPlayer;
 
     public bool IsBusy => _isBusy;
@@ -88,10 +109,32 @@ public class MultiplayerSessionManager : MonoBehaviour
         Instance = this;
 
         LocalPlayerName = PlayerPrefs.GetString(PrefPlayerNameKey, $"Seek_{UnityEngine.Random.Range(100, 999)}");
+        OnStatusMessage += m => LastStatusMessage = m;
+        RetroScreenEffect.ConfigureCamera(menuCamera);
         SetMenuCameraActive(true);
 
         NetworkPlayerController.OnActivePlayersChanged += HandleNetworkPlayersChanged;
         NetworkMatchState.MatchStartedChanged += HandleMatchStartedChanged;
+    }
+
+    /// <summary>
+    /// Safety net for networked sessions: keep the local in-match flag/menu camera in step with the
+    /// replicated MatchStarted value even if the change event was missed (e.g. it replicated while a
+    /// client was still finishing its join handshake).
+    /// </summary>
+    void SyncMatchStarted()
+    {
+        if (ConnectionMode != SessionConnectionMode.LocalLan && ConnectionMode != SessionConnectionMode.OnlineRelayCode)
+            return;
+        var ms = NetworkMatchState.Instance;
+        if (ms == null || !ms.IsSpawned) return;
+        if (ms.MatchStarted.Value != _inMatch)
+            HandleMatchStartedChanged(ms.MatchStarted.Value);
+    }
+
+    void Update()
+    {
+        if (!_isBusy) SyncMatchStarted();
     }
 
     void Start()
@@ -107,6 +150,9 @@ public class MultiplayerSessionManager : MonoBehaviour
 
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientDisconnected;
+
+        if (ActiveSession != null)
+            UnsubscribeSessionEvents(ActiveSession);
 
         if (Instance == this)
             Instance = null;
@@ -126,31 +172,58 @@ public class MultiplayerSessionManager : MonoBehaviour
         if (_isBusy) return false;
         _isBusy = true;
         SetPlayerName(playerName);
-        OnStatusMessage?.Invoke("Connecting to Unity Cloud & allocating Relay...");
 
         try
         {
+            ConnectingLabel = "HOSTING GAME";
+            OnStatusMessage?.Invoke("Hosting game...");
             await EnsureServicesSignedInAsync();
 
-            var options = new SessionOptions
+            Exception lastError = null;
+            foreach (RelayProtocol protocol in GetProtocolAttemptOrder())
             {
-                Name = $"{LocalPlayerName}'s Room",
-                MaxPlayers = Mathf.Clamp(maxPlayers, 2, 16),
-                IsPrivate = false,
-                PlayerProperties = new Dictionary<string, PlayerProperty>
+                Debug.Log($"[Multiplayer] Allocating Relay via {ProtocolLabel(protocol)}");
+                try
                 {
-                    { "name", new PlayerProperty(LocalPlayerName, VisibilityPropertyOptions.Member) }
+                    ConfigureTransportForProtocol(protocol);
+                    var options = new SessionOptions
+                    {
+                        Name = $"{LocalPlayerName}'s Room",
+                        MaxPlayers = Mathf.Clamp(maxPlayers, 2, 16),
+                        IsPrivate = false,
+                        PlayerProperties = new Dictionary<string, PlayerProperty>
+                        {
+                            { "name", new PlayerProperty(LocalPlayerName, VisibilityPropertyOptions.Member) }
+                        }
+                    }.WithRelayNetwork().WithNetworkOptions(new NetworkOptions { RelayProtocol = protocol });
+
+                    ActiveSession = await MultiplayerService.Instance.CreateSessionAsync(options);
+                    SubscribeSessionEvents(ActiveSession);
+
+                    if (!await WaitForNetworkAsync(host: true))
+                        throw new TimeoutException($"Relay host over {protocol} did not start listening in time.");
+
+                    ActiveRelayProtocol = protocol;
+                    RememberProtocol(protocol);
+                    ConnectionMode = SessionConnectionMode.OnlineRelayCode;
+                    _inMatch = false;
+
+                    OnStatusMessage?.Invoke($"Lobby created! Share code: {ActiveSession.Code}");
+                    OnSessionUpdated?.Invoke();
+                    return true;
                 }
-            }.WithRelayNetwork();
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Debug.LogWarning($"[Multiplayer] Host over {protocol} failed: {ex.Message}");
+                    await CleanupFailedAttemptAsync();
+                    if (IsServicesConfigError(ex)) break; // another protocol won't fix a dashboard/auth problem
+                    Debug.Log($"[Multiplayer] {ProtocolLabel(protocol)} failed - retrying with fallback protocol");
+                }
+            }
 
-            ActiveSession = await MultiplayerService.Instance.CreateSessionAsync(options);
-            SubscribeSessionEvents(ActiveSession);
-            ConnectionMode = SessionConnectionMode.OnlineRelayCode;
-            _inMatch = false;
-
-            OnStatusMessage?.Invoke($"Lobby created! Share code: {ActiveSession.Code}");
-            OnSessionUpdated?.Invoke();
-            return true;
+            OnErrorMessage?.Invoke(FormatServicesError(lastError, "Could not host online lobby (DTLS and WebSocket both failed)."));
+            return false;
         }
         catch (Exception ex)
         {
@@ -177,28 +250,56 @@ public class MultiplayerSessionManager : MonoBehaviour
 
         _isBusy = true;
         SetPlayerName(playerName);
+        ConnectingLabel = "JOINING GAME";
         OnStatusMessage?.Invoke($"Joining lobby {normalizedCode}...");
 
         try
         {
             await EnsureServicesSignedInAsync();
 
-            var joinOptions = new JoinSessionOptions
+            Exception lastError = null;
+            foreach (RelayProtocol protocol in GetProtocolAttemptOrder())
             {
-                PlayerProperties = new Dictionary<string, PlayerProperty>
+                Debug.Log($"[Multiplayer] Joining {normalizedCode} via {ProtocolLabel(protocol)}");
+                try
                 {
-                    { "name", new PlayerProperty(LocalPlayerName, VisibilityPropertyOptions.Member) }
+                    ConfigureTransportForProtocol(protocol);
+                    var joinOptions = new JoinSessionOptions
+                    {
+                        PlayerProperties = new Dictionary<string, PlayerProperty>
+                        {
+                            { "name", new PlayerProperty(LocalPlayerName, VisibilityPropertyOptions.Member) }
+                        }
+                    }.WithNetworkOptions(new NetworkOptions { RelayProtocol = protocol });
+
+                    ActiveSession = await MultiplayerService.Instance.JoinSessionByCodeAsync(normalizedCode, joinOptions);
+                    SubscribeSessionEvents(ActiveSession);
+
+                    if (!await WaitForNetworkAsync(host: false))
+                        throw new TimeoutException($"Relay handshake over {protocol} timed out.");
+
+                    ActiveRelayProtocol = protocol;
+                    RememberProtocol(protocol);
+                    ConnectionMode = SessionConnectionMode.OnlineRelayCode;
+                    _inMatch = false;
+                    SyncMatchStarted();
+
+                    OnStatusMessage?.Invoke($"Joined lobby {ActiveSession.Code}!");
+                    OnSessionUpdated?.Invoke();
+                    return true;
                 }
-            };
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Debug.LogWarning($"[Multiplayer] Join over {protocol} failed: {ex.Message}");
+                    await CleanupFailedAttemptAsync();
+                    if (IsServicesConfigError(ex) || IsSessionNotFound(ex)) break;
+                    Debug.Log($"[Multiplayer] {ProtocolLabel(protocol)} failed - retrying with fallback protocol");
+                }
+            }
 
-            ActiveSession = await MultiplayerService.Instance.JoinSessionByCodeAsync(normalizedCode, joinOptions);
-            SubscribeSessionEvents(ActiveSession);
-            ConnectionMode = SessionConnectionMode.OnlineRelayCode;
-            _inMatch = NetworkMatchState.Instance != null && NetworkMatchState.Instance.MatchStarted.Value;
-
-            OnStatusMessage?.Invoke($"Joined lobby {ActiveSession.Code}!");
-            OnSessionUpdated?.Invoke();
-            return true;
+            OnErrorMessage?.Invoke(FormatServicesError(lastError, $"Could not join lobby '{normalizedCode}'."));
+            return false;
         }
         catch (Exception ex)
         {
@@ -213,6 +314,87 @@ public class MultiplayerSessionManager : MonoBehaviour
         }
     }
 
+    IEnumerable<RelayProtocol> GetProtocolAttemptOrder()
+    {
+        if (PlayerPrefs.GetInt(PrefPreferWssKey, 0) == 1)
+        {
+            yield return RelayProtocol.WSS;
+            yield return RelayProtocol.DTLS;
+        }
+        else
+        {
+            yield return RelayProtocol.DTLS;
+            yield return RelayProtocol.WSS;
+        }
+    }
+
+    static void RememberProtocol(RelayProtocol protocol)
+    {
+        // If DTLS was blocked on this network, start with WSS next time and skip the timeout.
+        PlayerPrefs.SetInt(PrefPreferWssKey, protocol == RelayProtocol.WSS ? 1 : 0);
+        PlayerPrefs.Save();
+    }
+
+    static string ProtocolLabel(RelayProtocol p) => p == RelayProtocol.WSS ? "WebSocket (wss:443)" : "DTLS/UDP";
+
+    static void ConfigureTransportForProtocol(RelayProtocol protocol)
+    {
+        var transport = NetworkManager.Singleton != null ? NetworkManager.Singleton.GetComponent<UnityTransport>() : null;
+        if (transport != null)
+            transport.UseWebSockets = protocol == RelayProtocol.WSS;
+    }
+
+    async Task<bool> WaitForNetworkAsync(bool host)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return false;
+
+        bool transportFailed = false;
+        Action onTransportFailure = () => transportFailed = true;
+        nm.OnTransportFailure += onTransportFailure;
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            float timeout = Mathf.Max(relayConnectTimeoutSeconds, 15f);
+            while (sw.Elapsed.TotalSeconds < timeout)
+            {
+                if (host ? (nm.IsListening && nm.IsServer) : nm.IsConnectedClient)
+                    return true;
+                if (transportFailed)
+                    return false;
+                // Client transport already gave up (e.g. UDP blocked) -> stop waiting early.
+                if (!host && sw.Elapsed.TotalSeconds > 4.0 && !nm.IsListening && !nm.ShutdownInProgress)
+                    return false;
+                await Task.Delay(100);
+                if (this == null) return false;
+            }
+            Debug.LogWarning($"[Multiplayer] Network {(host ? "host start" : "client connect")} timed out after {timeout:0}s " +
+                             $"(listening={nm.IsListening}, client={nm.IsClient}, connected={nm.IsConnectedClient}).");
+            return host ? (nm.IsListening && nm.IsServer) : nm.IsConnectedClient;
+        }
+        finally
+        {
+            if (nm != null) nm.OnTransportFailure -= onTransportFailure;
+        }
+    }
+
+    /// <summary>True while a host/join/LAN connection attempt is in flight (drives the loading spinner).</summary>
+    public bool IsConnecting
+    {
+        get
+        {
+            if (_isBusy) return true;
+            var nm = NetworkManager.Singleton;
+            return ConnectionMode == SessionConnectionMode.LocalLan && nm != null &&
+                   nm.IsClient && !nm.IsServer && !nm.IsConnectedClient;
+        }
+    }
+
+    public string LastStatusMessage { get; private set; } = string.Empty;
+
+    /// <summary>Short, player-facing label for the loading overlay ("HOSTING GAME" / "JOINING GAME").</summary>
+    public string ConnectingLabel { get; private set; } = "CONNECTING";
+
     public bool StartLanHost(string playerName, ushort port = 0)
     {
         if (_isBusy || NetworkManager.Singleton == null) return false;
@@ -226,7 +408,9 @@ public class MultiplayerSessionManager : MonoBehaviour
         }
 
         _lanPort = port > 0 ? port : defaultLanPort;
-        transport.SetConnectionData("0.0.0.0", _lanPort);
+        transport.UseWebSockets = false;
+        transport.SetConnectionData("0.0.0.0", _lanPort, "0.0.0.0");
+        RefreshLocalLanIPv4();
 
         if (!NetworkManager.Singleton.StartHost())
         {
@@ -236,7 +420,7 @@ public class MultiplayerSessionManager : MonoBehaviour
 
         ConnectionMode = SessionConnectionMode.LocalLan;
         _inMatch = false;
-        OnStatusMessage?.Invoke($"LAN Lobby hosted on port {_lanPort}.");
+        OnStatusMessage?.Invoke($"LAN Lobby hosted at {LocalLanIPv4}:{_lanPort} - share this IP with players on the same Wi-Fi/Ethernet.");
         OnSessionUpdated?.Invoke();
         return true;
     }
@@ -249,6 +433,14 @@ public class MultiplayerSessionManager : MonoBehaviour
         string targetIp = string.IsNullOrWhiteSpace(ipAddress) ? "127.0.0.1" : ipAddress.Trim();
         ushort targetPort = port > 0 ? port : defaultLanPort;
 
+        // Accept "192.168.1.20:7777" pasted from the host's lobby card.
+        int colon = targetIp.LastIndexOf(':');
+        if (colon > 0 && ushort.TryParse(targetIp.Substring(colon + 1), out ushort pastedPort) && pastedPort > 0)
+        {
+            targetPort = pastedPort;
+            targetIp = targetIp.Substring(0, colon);
+        }
+
         var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         if (transport == null)
         {
@@ -257,6 +449,8 @@ public class MultiplayerSessionManager : MonoBehaviour
         }
 
         _lanPort = targetPort;
+        _lanTargetIp = targetIp;
+        transport.UseWebSockets = false;
         transport.SetConnectionData(targetIp, targetPort);
 
         if (!NetworkManager.Singleton.StartClient())
@@ -267,16 +461,67 @@ public class MultiplayerSessionManager : MonoBehaviour
 
         ConnectionMode = SessionConnectionMode.LocalLan;
         _inMatch = false;
+        ConnectingLabel = "JOINING GAME";
         OnStatusMessage?.Invoke($"Connecting to {targetIp}:{targetPort}...");
         OnSessionUpdated?.Invoke();
         return true;
     }
 
+    /// <summary>
+    /// Solo play runs as a private host bound to loopback only (no firewall prompt, nobody can join).
+    /// Every NetworkVariable/RPC path is then a normal, spawned host path - previously solo wrote to
+    /// unspawned NetworkVariables every frame, flooding the console with tens of thousands of warnings
+    /// and stalling the editor (which also broke MPPM/Relay testing).
+    /// </summary>
     public void StartSoloOffline(string playerName)
     {
         if (_isBusy) return;
         SetPlayerName(playerName);
 
+        var nm = NetworkManager.Singleton;
+        var transport = nm != null ? nm.GetComponent<UnityTransport>() : null;
+        if (nm != null && transport != null && !nm.IsListening)
+        {
+            CleanupOfflineSoloPlayer();
+            transport.UseWebSockets = false;
+            ushort port = FindFreeLoopbackPort();
+            transport.SetConnectionData("127.0.0.1", port, "127.0.0.1");
+            if (nm.StartHost())
+            {
+                ConnectionMode = SessionConnectionMode.SoloOffline;
+                _inMatch = true;
+                SetMenuCameraActive(false);
+                if (NetworkMatchState.Instance != null && NetworkMatchState.Instance.IsSpawned)
+                {
+                    NetworkMatchState.Instance.StartMatchOnHost();
+                    // Solo starts as a Hider (press H to swap roles).
+                    if (NetworkPlayerController.LocalInstance != null)
+                        NetworkPlayerController.LocalInstance.SetRole(PlayerRole.Hider);
+                }
+                OnSessionUpdated?.Invoke();
+                return;
+            }
+            Debug.LogWarning("[Multiplayer] Loopback solo host failed to start; falling back to unnetworked solo.");
+        }
+
+        StartSoloUnnetworked();
+    }
+
+    static ushort FindFreeLoopbackPort()
+    {
+        try
+        {
+            using var udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            return (ushort)((IPEndPoint)udp.Client.LocalEndPoint).Port;
+        }
+        catch (Exception)
+        {
+            return (ushort)UnityEngine.Random.Range(40000, 60000);
+        }
+    }
+
+    void StartSoloUnnetworked()
+    {
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
             NetworkManager.Singleton.Shutdown();
 
@@ -334,6 +579,7 @@ public class MultiplayerSessionManager : MonoBehaviour
 
             ConnectionMode = SessionConnectionMode.None;
             _inMatch = false;
+            SeekerVision.Apply(null, false, 0f); // drop the Seeker's fog / short view distance
             SetMenuCameraActive(true);
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
@@ -508,6 +754,11 @@ public class MultiplayerSessionManager : MonoBehaviour
         OnErrorMessage?.Invoke(message);
     }
 
+    /// <summary>
+    /// Fully tears down a session attempt: leaves/deletes the UGS session, unregisters callbacks,
+    /// shuts NGO down and waits for the transport to release its sockets, resets the transport to
+    /// defaults, and unfreezes cursor/input so the menu is usable again.
+    /// </summary>
     async Task CleanupFailedAttemptAsync()
     {
         if (ActiveSession != null)
@@ -528,8 +779,40 @@ public class MultiplayerSessionManager : MonoBehaviour
             }
         }
 
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
-            NetworkManager.Singleton.Shutdown();
+        var nm = NetworkManager.Singleton;
+        if (nm != null)
+        {
+            if (nm.IsListening || nm.IsClient || nm.IsServer)
+                nm.Shutdown(true);
+
+            var sw = Stopwatch.StartNew();
+            while (nm != null && nm.ShutdownInProgress && sw.Elapsed.TotalSeconds < 5.0)
+            {
+                await Task.Delay(50);
+                if (this == null) return;
+            }
+
+            var transport = nm != null ? nm.GetComponent<UnityTransport>() : null;
+            if (transport != null)
+            {
+                transport.UseWebSockets = false;
+                transport.SetConnectionData("127.0.0.1", defaultLanPort);
+            }
+        }
+
+        if (ConnectionMode != SessionConnectionMode.SoloOffline)
+        {
+            ConnectionMode = SessionConnectionMode.None;
+            _inMatch = false;
+            SeekerVision.Apply(null, false, 0f); // drop the Seeker's fog / short view distance
+            SetMenuCameraActive(true);
+        }
+
+        if (NetworkPlayerController.LocalInstance != null)
+            NetworkPlayerController.LocalInstance.SetPaused(false);
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+        OnSessionUpdated?.Invoke();
     }
 
     void CleanupOfflineSoloPlayer()
@@ -552,16 +835,59 @@ public class MultiplayerSessionManager : MonoBehaviour
             menuAudioListener.enabled = active;
     }
 
+    static string DetectLocalIPv4()
+    {
+        try
+        {
+            // The interface the OS would route outbound traffic through (UDP connect sends no packets).
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.Connect("8.8.8.8", 65530);
+            if (socket.LocalEndPoint is IPEndPoint ep && !IPAddress.IsLoopback(ep.Address) && !ep.Address.Equals(IPAddress.Any))
+                return ep.Address.ToString();
+        }
+        catch (Exception) { /* isolated LAN without a default route - fall through */ }
+
+        try
+        {
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                var t = ni.NetworkInterfaceType;
+                if (t != NetworkInterfaceType.Ethernet && t != NetworkInterfaceType.Wireless80211 && t != NetworkInterfaceType.GigabitEthernet)
+                    continue;
+
+                foreach (var addr in ni.GetIPProperties().UnicastAddresses)
+                {
+                    if (addr.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(addr.Address))
+                        return addr.Address.ToString();
+                }
+            }
+        }
+        catch (Exception) { }
+
+        return "127.0.0.1";
+    }
+
+    static bool IsServicesConfigError(Exception ex)
+    {
+        string msg = ex?.Message ?? string.Empty;
+        return msg.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               msg.IndexOf("403", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               msg.IndexOf("not enabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               msg.IndexOf("forbidden", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    static bool IsSessionNotFound(Exception ex)
+    {
+        string msg = ex?.Message ?? string.Empty;
+        return msg.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               msg.IndexOf("404", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     static string FormatServicesError(Exception ex, string fallback)
     {
-        string msg = ex.Message ?? string.Empty;
-        if (msg.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            msg.IndexOf("403", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            msg.IndexOf("not enabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            msg.IndexOf("forbidden", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
+        if (IsServicesConfigError(ex))
             return $"{fallback} Enable Lobby & Relay on Unity Cloud Dashboard first (or use LAN/Solo below).";
-        }
-        return $"{fallback} {msg}";
+        return $"{fallback} {ex?.Message}";
     }
 }

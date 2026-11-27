@@ -341,16 +341,21 @@ public static class BuildCafeteria
             player.transform.rotation = BuildEntranceStairs.GetWorldSpawnRotation();
         }
 
-        // ── LIGHTING & SAVE ──────────────────────────────────────────────
+        // ── PBR LIGHTING & POST-PROCESSING ──────────────────────────────
         foreach (var l in Object.FindObjectsByType<Light>(FindObjectsSortMode.None))
         {
             if (l.type == LightType.Directional)
             {
-                l.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-                l.intensity = 0.95f;
-                l.color = new Color(1.0f, 0.98f, 0.92f);
+                l.transform.rotation = Quaternion.Euler(52f, -35f, 0f);
+                l.intensity = 1.15f;
+                l.color = new Color(1.0f, 0.97f, 0.92f);
+                l.shadows = LightShadows.Soft;
+                l.shadowNormalBias = 0.35f;
+                l.shadowBias = 0.04f;
             }
         }
+
+        EnsureGlobalPostProcessing();
 
         var curScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
         EditorSceneManager.MarkSceneDirty(curScene);
@@ -607,11 +612,98 @@ public static class BuildCafeteria
     static void CreateDrainGrateStrip(
         GameObject parent, string name, Vector3 center, float length, bool alongZ, string grateTexPx)
     {
-        var mat = Mat($"M_{name}", grateTexPx, new Vector2(length * 1.5f, 1f), new Color(0.75f, 0.77f, 0.80f));
-        mat.SetFloat("_Smoothness", 0.22f);
-        var strip = CreateBoxWorld(parent, name, center, new Vector3(length, 0.02f, 0.52f), mat);
+        // 1. Recessed dark trough underneath
+        var matTrough = Mat("M_DrainGrate_Trough", null, Vector2.one, new Color(0.10f, 0.11f, 0.12f));
+        CreateBoxWorld(parent, $"{name}_Trough", center,
+            alongZ ? new Vector3(0.52f, 0.01f, length) : new Vector3(length, 0.01f, 0.52f),
+            matTrough);
+
+        // 2. Thick, solid 3D rectangular steel bars spaced cleanly (zero sub-pixel aliasing)
+        var matSteel = Mat("M_DrainGrate_ChunkyBars", null, Vector2.one, new Color(0.32f, 0.34f, 0.36f));
+        matSteel.SetFloat("_Smoothness", 0.30f);
+        matSteel.SetFloat("_Metallic", 0.65f);
+
+        var grateGo = new GameObject(name);
+        grateGo.transform.SetParent(parent.transform, false);
+        grateGo.transform.position = center + new Vector3(0f, 0.01f, 0f);
         if (alongZ)
-            strip.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
+            grateGo.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
+
+        Mesh mesh = BuildChunkyDrainGrateMesh(name, length, 0.52f);
+        var mf = grateGo.AddComponent<MeshFilter>();
+        mf.sharedMesh = mesh;
+        var mr = grateGo.AddComponent<MeshRenderer>();
+        mr.sharedMaterial = matSteel;
+
+        var col = grateGo.AddComponent<BoxCollider>();
+        col.size = new Vector3(length, 0.04f, 0.52f);
+        col.center = new Vector3(0f, 0.02f, 0f);
+    }
+
+    static Mesh BuildChunkyDrainGrateMesh(string name, float length, float width)
+    {
+        var mesh = new Mesh { name = $"{name}_Mesh" };
+        mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+
+        var verts = new List<Vector3>();
+        var tris  = new List<int>();
+        var norms = new List<Vector3>();
+
+        float railThick = 0.045f;
+        float railH = 0.035f;
+
+        // Long side rails
+        AddChunkyBox(verts, tris, norms, new Vector3(0f, railH * 0.5f, -width * 0.5f + railThick * 0.5f), new Vector3(length, railH, railThick));
+        AddChunkyBox(verts, tris, norms, new Vector3(0f, railH * 0.5f,  width * 0.5f - railThick * 0.5f), new Vector3(length, railH, railThick));
+
+        // Transverse solid rectangular bars spaced cleanly
+        float barSpan = width - railThick * 2f;
+        float barThick = 0.048f; // 4.8 cm thick solid steel bar
+        float barH = 0.030f;
+        float pitch = 0.13f; // 13 cm spacing -> perfectly avoids aliasing and moiré
+
+        int numBars = Mathf.Max(1, Mathf.FloorToInt((length - 0.08f) / pitch));
+        float startX = -((numBars - 1) * pitch) * 0.5f;
+
+        for (int b = 0; b < numBars; b++)
+        {
+            float x = startX + b * pitch;
+            AddChunkyBox(verts, tris, norms, new Vector3(x, barH * 0.5f, 0f), new Vector3(barThick, barH, barSpan));
+        }
+
+        mesh.SetVertices(verts);
+        mesh.SetNormals(norms);
+        mesh.SetTriangles(tris, 0);
+        return mesh;
+    }
+
+    static void AddChunkyBox(List<Vector3> verts, List<int> tris, List<Vector3> norms, Vector3 center, Vector3 size)
+    {
+        Vector3 h = size * 0.5f;
+        Vector3 c0 = center + new Vector3(-h.x, -h.y, -h.z);
+        Vector3 c1 = center + new Vector3( h.x, -h.y, -h.z);
+        Vector3 c2 = center + new Vector3( h.x,  h.y, -h.z);
+        Vector3 c3 = center + new Vector3(-h.x,  h.y, -h.z);
+        Vector3 c4 = center + new Vector3(-h.x, -h.y,  h.z);
+        Vector3 c5 = center + new Vector3( h.x, -h.y,  h.z);
+        Vector3 c6 = center + new Vector3( h.x,  h.y,  h.z);
+        Vector3 c7 = center + new Vector3(-h.x,  h.y,  h.z);
+
+        AddQuadFace(verts, tris, norms, c0, c3, c2, c1, Vector3.back);
+        AddQuadFace(verts, tris, norms, c5, c6, c7, c4, Vector3.forward);
+        AddQuadFace(verts, tris, norms, c4, c7, c3, c0, Vector3.left);
+        AddQuadFace(verts, tris, norms, c1, c2, c6, c5, Vector3.right);
+        AddQuadFace(verts, tris, norms, c3, c7, c6, c2, Vector3.up);
+        AddQuadFace(verts, tris, norms, c4, c0, c1, c5, Vector3.down);
+    }
+
+    static void AddQuadFace(List<Vector3> verts, List<int> tris, List<Vector3> norms, Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 n)
+    {
+        int i = verts.Count;
+        verts.Add(v0); verts.Add(v1); verts.Add(v2); verts.Add(v3);
+        norms.Add(n); norms.Add(n); norms.Add(n); norms.Add(n);
+        tris.Add(i); tris.Add(i + 1); tris.Add(i + 2);
+        tris.Add(i); tris.Add(i + 2); tris.Add(i + 3);
     }
 
     static string EnsureDrainGrateTexture(string dstAssetPath, int size)
@@ -971,7 +1063,24 @@ public static class BuildCafeteria
 
         m.color = baseColor;
         m.SetColor("_BaseColor", baseColor);
-        m.SetFloat("_Smoothness", 0.08f); // matte retro look
+
+        // PBR physical surface parameters
+        float smoothness = 0.22f;
+        float metallic = 0.0f;
+        string lower = name.ToLowerInvariant();
+        if (lower.Contains("floor") || lower.Contains("slate")) { smoothness = 0.40f; }
+        else if (lower.Contains("table") || lower.Contains("marble")) { smoothness = 0.65f; }
+        else if (lower.Contains("steel") || lower.Contains("metal") || lower.Contains("rail") || lower.Contains("grate") || lower.Contains("bars") || lower.Contains("alum"))
+        {
+            smoothness = 0.60f;
+            metallic = 0.80f;
+        }
+        else if (lower.Contains("chair")) { smoothness = 0.42f; }
+        else if (lower.Contains("glass")) { smoothness = 0.92f; }
+        else if (lower.Contains("wall")) { smoothness = 0.15f; }
+
+        m.SetFloat("_Smoothness", smoothness);
+        m.SetFloat("_Metallic", metallic);
 
         if (!string.IsNullOrEmpty(texPath))
         {
@@ -993,5 +1102,54 @@ public static class BuildCafeteria
         EditorUtility.SetDirty(m);
         s_MatCache[name] = m;
         return m;
+    }
+
+    static void EnsureGlobalPostProcessing()
+    {
+        var volObj = GameObject.Find("Global_PostProcessVolume");
+        if (volObj == null)
+        {
+            volObj = new GameObject("Global_PostProcessVolume");
+            Undo.RegisterCreatedObjectUndo(volObj, "Create Post Process Volume");
+        }
+
+        var volume = volObj.GetComponent<UnityEngine.Rendering.Volume>() ?? volObj.AddComponent<UnityEngine.Rendering.Volume>();
+        volume.isGlobal = true;
+
+        string profilePath = "Assets/Settings/Global_PostProfile.asset";
+        var profile = AssetDatabase.LoadAssetAtPath<UnityEngine.Rendering.VolumeProfile>(profilePath);
+        if (profile == null)
+        {
+            profile = ScriptableObject.CreateInstance<UnityEngine.Rendering.VolumeProfile>();
+            AssetDatabase.CreateAsset(profile, profilePath);
+        }
+
+        // 1. Tonemapping ACES (filmic rich PBR color response)
+        if (!profile.TryGet<UnityEngine.Rendering.Universal.Tonemapping>(out var tonemap))
+            tonemap = profile.Add<UnityEngine.Rendering.Universal.Tonemapping>(true);
+        tonemap.mode.Override(UnityEngine.Rendering.Universal.TonemappingMode.ACES);
+
+        // 2. Cinematic Bloom
+        if (!profile.TryGet<UnityEngine.Rendering.Universal.Bloom>(out var bloom))
+            bloom = profile.Add<UnityEngine.Rendering.Universal.Bloom>(true);
+        bloom.threshold.Override(1.0f);
+        bloom.intensity.Override(1.25f);
+        bloom.scatter.Override(0.68f);
+
+        // 3. Color Adjustments (vibrant, rich contrast)
+        if (!profile.TryGet<UnityEngine.Rendering.Universal.ColorAdjustments>(out var colorAdj))
+            colorAdj = profile.Add<UnityEngine.Rendering.Universal.ColorAdjustments>(true);
+        colorAdj.postExposure.Override(0.12f);
+        colorAdj.contrast.Override(12f);
+        colorAdj.saturation.Override(14f);
+
+        // 4. Subtle Vignette
+        if (!profile.TryGet<UnityEngine.Rendering.Universal.Vignette>(out var vignette))
+            vignette = profile.Add<UnityEngine.Rendering.Universal.Vignette>(true);
+        vignette.intensity.Override(0.20f);
+        vignette.smoothness.Override(0.40f);
+
+        EditorUtility.SetDirty(profile);
+        volume.sharedProfile = profile;
     }
 }
